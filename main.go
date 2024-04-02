@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
+	_ "net/http/pprof"
 	"os"
+	"runtime/pprof"
+	"sort"
 	"strconv"
 	"strings"
-  "math"
-  "sort"
 )
 
 
@@ -27,11 +29,14 @@ func main() {
   }
 
 
+  state_arena := make([]State, 0)
   m := make(map[string]*State)
   keys := make([]string, 0)
 
   fileScanner := bufio.NewScanner(file)
+  total := 0
   for fileScanner.Scan() {
+    total++
     text := fileScanner.Text()
     f := strings.Split(text, ";")
     value, err := strconv.ParseFloat(f[1], 64)
@@ -41,18 +46,33 @@ func main() {
     }
     key := f[0]
     if m[key] == nil {
-      m[key] = &State{min: math.MaxFloat64, max: math.SmallestNonzeroFloat64, sum: 0, count: 0}
+      if cap(state_arena) <= len(state_arena) + 1 {
+        state_arena = append(state_arena, State{})
+      } else {
+        state_arena = state_arena[:len(state_arena) + 1]
+      }
+      state := &state_arena[len(state_arena) - 1]
+      state.min = math.MaxFloat64
+      state.max = math.SmallestNonzeroFloat64
+      state.sum = 0
+      state.count = 0
+      m[key] = state
       keys = append(keys, key)
     }
     // detect overflow
-    if math.MaxFloat64 - m[key].sum < value {
-      fmt.Println("Overflow detected")
-      return
+    // if math.MaxFloat64 - m[key].sum < value {
+    //   fmt.Println("Overflow detected")
+    //   return
+    // }
+    state := m[key]
+    state.count++
+    state.sum += value
+    if value < state.min {
+      state.min = value
     }
-    m[key].count++
-    m[key].sum += value
-    m[key].min = math.Min(m[key].min, value)
-    m[key].max = math.Max(m[key].max, value)
+    if value > state.max {
+      state.max = value
+    }
   }
   sort.Strings(keys)
   fmt.Printf("{")
@@ -64,4 +84,5 @@ func main() {
     }
   }
   fmt.Printf("}")
+  fmt.Println("\ntotal: ", total)
 }
