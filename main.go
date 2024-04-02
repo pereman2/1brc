@@ -22,6 +22,16 @@ type State struct {
 
 
 func main() {
+  // prof stuff
+  f, err := os.Create("cpu.pprof")
+  if err != nil {
+    panic(err)
+  }
+  pprof.StartCPUProfile(f)
+  defer pprof.StopCPUProfile()
+
+
+  // end prof
   file, err := os.OpenFile("measurements.txt", os.O_RDONLY, 0666)
   if err != nil {
     fmt.Println("Error opening file")
@@ -38,13 +48,13 @@ func main() {
   for fileScanner.Scan() {
     total++
     text := fileScanner.Text()
-    f := strings.Split(text, ";")
-    value, err := strconv.ParseFloat(f[1], 64)
+    semiColonIndex := strings.Index(text, ";")
+    key := text[:semiColonIndex]
+    value, err := strconv.ParseFloat(text[semiColonIndex + 1:], 64)
     if err != nil {
       fmt.Println("Error converting to float")
       return
     }
-    key := f[0]
     if m[key] == nil {
       if cap(state_arena) <= len(state_arena) + 1 {
         state_arena = append(state_arena, State{})
