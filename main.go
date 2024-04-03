@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unsafe"
 )
 
 
@@ -32,7 +33,7 @@ func main() {
 
 
   // end prof
-  file, err := os.OpenFile("measurements.txt", os.O_RDONLY, 0666)
+  file, err := os.OpenFile("measurements-pere.txt", os.O_RDONLY, 0666)
   if err != nil {
     fmt.Println("Error opening file")
     return
@@ -47,15 +48,27 @@ func main() {
   total := 0
   for fileScanner.Scan() {
     total++
-    text := fileScanner.Text()
-    semiColonIndex := strings.Index(text, ";")
-    key := text[:semiColonIndex]
-    value, err := strconv.ParseFloat(text[semiColonIndex + 1:], 64)
+    text := fileScanner.Bytes()
+    semiColonIndex := 0;
+    for i, c := range text {
+      if c == ';' {
+        semiColonIndex = i
+        break
+      }
+    }
+
+    keyBytes := text[:semiColonIndex]
+    key := (*string)(unsafe.Pointer(&keyBytes))
+    valueBytes := text[semiColonIndex + 1:]
+    valueBytesString := (*string)(unsafe.Pointer(&valueBytes))
+
+    value, err := strconv.ParseFloat(*valueBytesString, 64)
     if err != nil {
       fmt.Println("Error converting to float")
       return
     }
-    if m[key] == nil {
+
+    if m[*key] == nil {
       if cap(state_arena) <= len(state_arena) + 1 {
         state_arena = append(state_arena, State{})
       } else {
@@ -66,15 +79,16 @@ func main() {
       state.max = math.SmallestNonzeroFloat64
       state.sum = 0
       state.count = 0
-      m[key] = state
-      keys = append(keys, key)
+      keyCopy := strings.Clone(*key)
+      m[keyCopy] = state
+      keys = append(keys, keyCopy)
     }
     // detect overflow
     // if math.MaxFloat64 - m[key].sum < value {
     //   fmt.Println("Overflow detected")
     //   return
     // }
-    state := m[key]
+    state := m[*key]
     state.count++
     state.sum += value
     if value < state.min {
