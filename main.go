@@ -8,7 +8,7 @@ import (
 	"os"
 	"runtime/pprof"
 	"sort"
-	"strconv"
+	// "strconv"
 	"strings"
 	"unsafe"
 )
@@ -84,6 +84,47 @@ func (m *HashMap) Put(key *string, state *State) {
 }
 
 
+func fastFloat(repr *string) float64 {
+  i := 0
+  minus := false
+  if (*repr)[0] == '-' {
+    minus = true
+    i++
+  }
+
+  dot := 0
+  for ; i < len(*repr); i++ {
+    if (*repr)[i] == '.' {
+      dot = i
+      break;
+    }
+  }
+
+  start := 0
+  if minus {
+    start = 1
+  }
+  left := 0
+  for l := dot-1; l >= start; l-- {
+    left *= 10
+    left += int((*repr)[l] - '0')
+  }
+
+  right := 0
+  for l := len(*repr) - 1; l > dot; l-- {
+    right *= 10
+    right += int((*repr)[l] - '0')
+  }
+  res := float64(left);
+  if right != 0 {
+    res += 1.0 / float64(right)
+  }
+  if minus {
+    res *= -1
+  }
+  return res
+}
+
 
 
 func main() {
@@ -127,11 +168,12 @@ func main() {
     valueBytes := text[semiColonIndex + 1:]
     valueBytesString := (*string)(unsafe.Pointer(&valueBytes))
 
-    value, err := strconv.ParseFloat(*valueBytesString, 64)
-    if err != nil {
-      fmt.Println("Error converting to float")
-      return
-    }
+    // value, err := strconv.ParseFloat(*valueBytesString, 64)
+    value := fastFloat(valueBytesString)
+    // if err != nil {
+    //   fmt.Println("Error converting to float")
+    //   return
+    // }
 
     state := fastMap.Get(key)
     if state == nil {
