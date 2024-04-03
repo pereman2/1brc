@@ -8,10 +8,87 @@ import (
 	"os"
 	"runtime/pprof"
 	"sort"
+	"time"
+
 	// "strconv"
 	"strings"
+	"sync"
 	"unsafe"
+	// "github.com/cyub/ringbuffer"
+	// "github.com/GavinClarke0/lockless-generic-ring-buffer"
 )
+
+type Event struct {
+  s []byte
+  f float64
+  consumed bool
+}
+
+// type RingBuffer struct {
+//   buffer []Event
+//   readIndex int
+//   writeIndex int
+//   m sync.Mutex
+//   items int
+//   s *sync.Cond
+// }
+//
+// func NewRingBuffer(size int) *RingBuffer {
+//
+//   ring := &RingBuffer{buffer: make([]Event, size), readIndex: 0, writeIndex: 0}
+//   for i := 0; i < size; i++ {
+//     ring.buffer[i] = Event{consumed: true}
+//   }
+//   ring.items = 0
+//   ring.s = sync.NewCond(&ring.m)
+//   return ring
+// }
+//
+// func (r *RingBuffer) Write(e Event) {
+//   for {
+//     if r.buffer[r.writeIndex].consumed {
+//       break
+//     }
+//   }
+//
+//   r.buffer[r.writeIndex].consumed = false
+//   r.buffer[r.writeIndex].s = e.s
+//   if r.writeIndex == 3 {
+//     fmt.Println("writeIndex: ", r.writeIndex)
+//     fmt.Println("readIndex: ", r.readIndex)
+//     fmt.Println("consumed: ", r.buffer[r.writeIndex].consumed)
+//     fmt.Println("state: ", r.buffer[r.writeIndex].s)
+//     fmt.Println("value: ", r.buffer[r.writeIndex].f)
+//   }
+//   r.items++
+//   r.buffer[r.writeIndex].f = e.f
+//   r.s.Signal()
+//
+//   r.writeIndex = (r.writeIndex + 1) % len(r.buffer);
+// }
+//
+// func (r *RingBuffer) Read() Event {
+//   r.s.Wait()
+//   e := r.buffer[r.readIndex]
+//   if e.s == nil {
+//     fmt.Println("nil state")
+//     fmt.Println("writeIndex: ", r.writeIndex)
+//     fmt.Println("readIndex: ", r.readIndex)
+//     fmt.Println("consumed: ", r.buffer[r.readIndex].consumed)
+//     fmt.Println("state: ", r.buffer[r.readIndex].s)
+//     fmt.Println("value: ", r.buffer[r.readIndex].f)
+//     fmt.Println(r.readIndex)
+//     os.Exit(1)
+//   }
+//   r.buffer[r.readIndex].consumed = true
+//   r.readIndex = (r.readIndex + 1) % len(r.buffer);
+//   return e
+// }
+//
+
+type Queue struct {
+  q chan Event
+}
 
 type State struct {
   min float64
@@ -45,12 +122,12 @@ func NewHashMap(size int) *HashMap {
 }
 
 func stupidHash(key *string) uint64 {
-  h := uint64(0)
-  for i := 0; i < len(*key); i++ {
-    h += uint64((*key)[i])
-    h %= 512;
-  }
-  return h
+  // h := uint64(0)
+  // for i := 0; i < len(*key); i++ {
+  //   h += uint64((*key)[i])
+  //   h %= 512;
+  // }
+  return ( uint64(len(*key)) * uint64((*key)[0]) ) % 512
 }
 
 func (m *HashMap) Get(key *string) *State {
@@ -126,35 +203,16 @@ func fastFloat(repr *string) float64 {
 }
 
 
+func Parser(ring *Queue, wg *sync.WaitGroup, writing *uint64, fastMap *HashMap, state_arena []State, keys *[]string) {
+  // consumer, err := ring.CreateConsumer()
+  // if err != nil {
+  //   fmt.Println("Error creating consumer")
+  //   return
+  // }
+  for {
+    e := <-ring.q
 
-func main() {
-  // prof stuff
-  f, err := os.Create("cpu.pprof")
-  if err != nil {
-    panic(err)
-  }
-  pprof.StartCPUProfile(f)
-  defer pprof.StopCPUProfile()
-
-
-  // end prof
-  file, err := os.OpenFile("measurements-pere.txt", os.O_RDONLY, 0666)
-  if err != nil {
-    fmt.Println("Error opening file")
-    return
-  }
-
-
-  state_arena := make([]State, 0)
-  // m := make(map[string]*State)
-  fastMap := NewHashMap(512)
-  keys := make([]string, 0)
-
-  fileScanner := bufio.NewScanner(file)
-  total := 0
-  for fileScanner.Scan() {
-    total++
-    text := fileScanner.Bytes()
+    text := e.s
     semiColonIndex := 0;
     for i, c := range text {
       if c == ';' {
@@ -162,7 +220,6 @@ func main() {
         break
       }
     }
-
     keyBytes := text[:semiColonIndex]
     key := (*string)(unsafe.Pointer(&keyBytes))
     valueBytes := text[semiColonIndex + 1:]
@@ -189,15 +246,10 @@ func main() {
       state.count = 0
       keyCopy := strings.Clone(*key)
       fastMap.Put(&keyCopy, state)
-      keys = append(keys, keyCopy)
+      *keys = append(*keys, keyCopy)
     }
-
-    // detect overflow
-    // if math.MaxFloat64 - m[key].sum < value {
-    //   fmt.Println("Overflow detected")
-    //   return
-    // }
-
+    // state := e.s
+    // value := e.f
     state.count++
     state.sum += value
     if value < state.min {
@@ -205,6 +257,79 @@ func main() {
     }
     if value > state.max {
       state.max = value
+    }
+    *writing++
+  }
+}
+
+func main() {
+  // prof stuff
+  f, err := os.Create("cpu.pprof")
+  if err != nil {
+    panic(err)
+  }
+  pprof.StartCPUProfile(f)
+  defer pprof.StopCPUProfile()
+
+
+  // end prof
+  file, err := os.OpenFile("measurements-pere.txt", os.O_RDONLY, 0666)
+  if err != nil {
+    fmt.Println("Error opening file")
+    return
+  }
+
+
+  state_arena := make([]State, 0)
+  // m := make(map[string]*State)
+  fastMap := NewHashMap(512)
+  keys := make([]string, 0)
+
+  wg := sync.WaitGroup{}
+  queue := Queue{q: make(chan Event, 1000000)}
+  // ringBuffer := NewRingBuffer(10000)
+  // ringBuffer, err := locklessgenericringbuffer.CreateBuffer[Event](1 << 16, 1)
+  if err != nil {
+    fmt.Println("Error creating ring buffer")
+    return
+  }
+  // ringBuffer := ringbuffer.NewSpscRingBuffer(10000)
+  writing := uint64(0)
+
+  go Parser(&queue, &wg, &writing, fastMap, state_arena, &keys)
+
+  fileScanner := bufio.NewScanner(file)
+  total := 0
+  start := time.Now()
+  sendTime := int64(0)
+  for fileScanner.Scan() {
+    total++
+    text := fileScanner.Bytes()
+
+
+    // detect overflow
+    // if math.MaxFloat64 - m[key].sum < value {
+    //   fmt.Println("Overflow detected")
+    //   return
+    // }
+    // queue.q <- Event{s: state, f: value}
+    // println("add text:", string(text))
+    // ringBuffer.Write(Event{s: text, f: 0})
+    startSend := time.Since(start).Nanoseconds()
+
+    e := Event{f: 0}
+    e.s = make([]byte, len(text))
+    copy(e.s, text)
+    queue.q <- e
+
+    sendTime += time.Since(start).Nanoseconds() - startSend
+  }
+  totalTime := time.Since(start).Nanoseconds()
+
+
+  for {
+    if writing == uint64(total) {
+      break
     }
   }
   sort.Strings(keys)
@@ -220,4 +345,10 @@ func main() {
   fmt.Printf("}")
   fmt.Println("\ntotal: ", total)
   fmt.Println("\nkeys: ", len(keys))
+
+  wholeTime := time.Since(start).Nanoseconds()
+  fmt.Printf("Parse thread time %fs\n", float64(totalTime) / float64(1000000000.0))
+  fmt.Printf("\tScan time %fs\n", float64(totalTime - sendTime) / float64(1000000000.0))
+  fmt.Printf("\tSend time %fs\n", float64(sendTime) / float64(1000000000.0))
+  fmt.Printf("Total time %fs\n", float64(wholeTime) / float64(1000000000.0))
 }
