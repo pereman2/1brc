@@ -13,13 +13,77 @@ import (
 	"unsafe"
 )
 
-
 type State struct {
   min float64
   max float64
   sum float64
   count int64
 }
+
+
+type Bucket struct {
+  key string
+  hash uint64
+  state *State
+  used bool
+}
+
+type HashMap struct {
+  size int
+  buckets [][]Bucket
+}
+
+func NewHashMap(size int) *HashMap {
+  h := &HashMap{size: size, buckets: make([][]Bucket, size)}
+  for i := 0; i < size; i++ {
+    h.buckets[i] = make([]Bucket, 0)
+    for j := 0; j < size; j++ {
+      h.buckets[i] = append(h.buckets[i], Bucket{used: false})
+    }
+  }
+  return h
+}
+
+func stupidHash(key *string) uint64 {
+  h := uint64(0)
+  for i := 0; i < len(*key); i++ {
+    h += uint64((*key)[i])
+    h %= 512;
+  }
+  return h
+}
+
+func (m *HashMap) Get(key *string) *State {
+  h := stupidHash(key)
+
+  bucketIndex := 0
+  for bucketIndex = 0; bucketIndex < len(m.buckets[h]) && m.buckets[h][bucketIndex].used; bucketIndex++ {
+    b := m.buckets[h][bucketIndex]
+    if b.key == *key {
+      return b.state
+    }
+  }
+  return nil
+}
+
+func (m *HashMap) Put(key *string, state *State) {
+  // stupid hash
+  h := stupidHash(key)
+
+  bucketIndex := 0
+  for bucketIndex = 0; bucketIndex < len(m.buckets[h]) && m.buckets[h][bucketIndex].used; bucketIndex++ {
+    b := m.buckets[h][bucketIndex]
+    if b.key == *key {
+      return
+    }
+  }
+  m.buckets[h][bucketIndex].key = *key
+  m.buckets[h][bucketIndex].hash = h
+  m.buckets[h][bucketIndex].state = state
+  m.buckets[h][bucketIndex].used = true
+}
+
+
 
 
 func main() {
@@ -41,7 +105,8 @@ func main() {
 
 
   state_arena := make([]State, 0)
-  m := make(map[string]*State)
+  // m := make(map[string]*State)
+  fastMap := NewHashMap(512)
   keys := make([]string, 0)
 
   fileScanner := bufio.NewScanner(file)
@@ -68,27 +133,29 @@ func main() {
       return
     }
 
-    if m[*key] == nil {
+    state := fastMap.Get(key)
+    if state == nil {
       if cap(state_arena) <= len(state_arena) + 1 {
         state_arena = append(state_arena, State{})
       } else {
         state_arena = state_arena[:len(state_arena) + 1]
       }
-      state := &state_arena[len(state_arena) - 1]
+      state = &state_arena[len(state_arena) - 1]
       state.min = math.MaxFloat64
       state.max = math.SmallestNonzeroFloat64
       state.sum = 0
       state.count = 0
       keyCopy := strings.Clone(*key)
-      m[keyCopy] = state
+      fastMap.Put(&keyCopy, state)
       keys = append(keys, keyCopy)
     }
+
     // detect overflow
     // if math.MaxFloat64 - m[key].sum < value {
     //   fmt.Println("Overflow detected")
     //   return
     // }
-    state := m[*key]
+
     state.count++
     state.sum += value
     if value < state.min {
@@ -101,12 +168,14 @@ func main() {
   sort.Strings(keys)
   fmt.Printf("{")
   for i, key := range keys {
-    mean := m[key].sum / float64(m[key].count)
-    fmt.Printf("%s=%f/%f/%f, ", key, m[key].min, m[key].max, mean)
+    state := fastMap.Get(&key)
+    mean := state.sum / float64(state.count)
+    fmt.Printf("%s=%f/%f/%f, ", key, state.min, state.max, mean)
     if i == len(keys) - 1 {
       fmt.Printf("\b\b")
     }
   }
   fmt.Printf("}")
   fmt.Println("\ntotal: ", total)
+  fmt.Println("\nkeys: ", len(keys))
 }
