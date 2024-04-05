@@ -7,19 +7,16 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"runtime/pprof"
-	"sort"
+	"strings"
+
 	"time"
 
-	// "strconv"
-	"strings"
 	"sync"
 	"unsafe"
-	// "github.com/cyub/ringbuffer"
-	// "github.com/GavinClarke0/lockless-generic-ring-buffer"
 )
 
 type Event struct {
-  s []byte
+  s uint64
   f float64
   consumed bool
 }
@@ -101,7 +98,7 @@ type State struct {
 type Bucket struct {
   key string
   hash uint64
-  state *State
+  value uint64
   used bool
 }
 
@@ -121,42 +118,40 @@ func NewHashMap(size int) *HashMap {
   return h
 }
 
+
 func stupidHash(key *string) uint64 {
-  // h := uint64(0)
-  // for i := 0; i < len(*key); i++ {
-  //   h += uint64((*key)[i])
-  //   h %= 512;
-  // }
-  return ( uint64(len(*key)) * uint64((*key)[0]) ) % 512
+  hash := uint64(0)
+  hash = hash + 31 + uint64((*key)[0])
+  return uint64(hash) % 1000
 }
 
-func (m *HashMap) Get(key *string) *State {
+func (m *HashMap) Get(key *string) *uint64 {
   h := stupidHash(key)
 
   bucketIndex := 0
   for bucketIndex = 0; bucketIndex < len(m.buckets[h]) && m.buckets[h][bucketIndex].used; bucketIndex++ {
     b := m.buckets[h][bucketIndex]
     if b.key == *key {
-      return b.state
+      return &b.value
     }
   }
   return nil
 }
 
-func (m *HashMap) Put(key *string, state *State) {
+func (m *HashMap) Put(key string, value uint64) {
   // stupid hash
-  h := stupidHash(key)
+  h := stupidHash(&key)
 
   bucketIndex := 0
   for bucketIndex = 0; bucketIndex < len(m.buckets[h]) && m.buckets[h][bucketIndex].used; bucketIndex++ {
     b := m.buckets[h][bucketIndex]
-    if b.key == *key {
+    if b.key == key {
       return
     }
   }
-  m.buckets[h][bucketIndex].key = *key
+  m.buckets[h][bucketIndex].key = key
   m.buckets[h][bucketIndex].hash = h
-  m.buckets[h][bucketIndex].state = state
+  m.buckets[h][bucketIndex].value = value
   m.buckets[h][bucketIndex].used = true
 }
 
@@ -203,63 +198,51 @@ func fastFloat(repr *string) float64 {
 }
 
 
-func Parser(ring *Queue, wg *sync.WaitGroup, writing *uint64, fastMap *HashMap, state_arena []State, keys *[]string) {
+func Parser(ring *Queue, wg *sync.WaitGroup, writing *uint64, fastMap *[]*State, state_arena []State, gstate *GState) {
   // consumer, err := ring.CreateConsumer()
   // if err != nil {
   //   fmt.Println("Error creating consumer")
   //   return
   // }
   for {
-    e := <-ring.q
-
-    text := e.s
-    semiColonIndex := 0;
-    for i, c := range text {
-      if c == ';' {
-        semiColonIndex = i
-        break
+    gstate.backBufferMutex.Lock()
+    gstate.backBufferCond.Wait()
+    for i := 0; i < len(gstate.backBuffer); i++ {
+      e := &gstate.backBuffer[i]
+      id := e.s
+      value := e.f
+      state := (*fastMap)[id]
+      if state == nil {
+        println("state is nil")
+        println("id: ", id)
+        println("value: ", value)
+        os.Exit(1)
       }
-    }
-    keyBytes := text[:semiColonIndex]
-    key := (*string)(unsafe.Pointer(&keyBytes))
-    valueBytes := text[semiColonIndex + 1:]
-    valueBytesString := (*string)(unsafe.Pointer(&valueBytes))
-
-    // value, err := strconv.ParseFloat(*valueBytesString, 64)
-    value := fastFloat(valueBytesString)
-    // if err != nil {
-    //   fmt.Println("Error converting to float")
-    //   return
-    // }
-
-    state := fastMap.Get(key)
-    if state == nil {
-      if cap(state_arena) <= len(state_arena) + 1 {
-        state_arena = append(state_arena, State{})
-      } else {
-        state_arena = state_arena[:len(state_arena) + 1]
+      state.count++
+      state.sum += value
+      if value < state.min {
+        state.min = value
       }
-      state = &state_arena[len(state_arena) - 1]
-      state.min = math.MaxFloat64
-      state.max = math.SmallestNonzeroFloat64
-      state.sum = 0
-      state.count = 0
-      keyCopy := strings.Clone(*key)
-      fastMap.Put(&keyCopy, state)
-      *keys = append(*keys, keyCopy)
+      if value > state.max {
+        state.max = value
+      }
+      *writing++
+      gstate.backBuffer[i].consumed = true
     }
-    // state := e.s
-    // value := e.f
-    state.count++
-    state.sum += value
-    if value < state.min {
-      state.min = value
-    }
-    if value > state.max {
-      state.max = value
-    }
-    *writing++
+    gstate.backBufferMutex.Unlock()
   }
+}
+
+type GState struct {
+  backBuffer []Event
+  frontBuffer []Event
+  backBufferMutex sync.Mutex
+  backBufferCond sync.Cond
+}
+
+type NameKey struct {
+  name string
+  id int
 }
 
 func main() {
@@ -282,11 +265,19 @@ func main() {
 
   state_arena := make([]State, 0)
   // m := make(map[string]*State)
-  fastMap := NewHashMap(512)
-  keys := make([]string, 0)
+  fastMap := make([]*State, 10000)
+  keys := make([]NameKey, 0)
 
   wg := sync.WaitGroup{}
-  queue := Queue{q: make(chan Event, 1000000)}
+  queue := Queue{q: make(chan Event, 10000)}
+  gstate := GState{}
+  gstate.backBuffer = make([]Event, 10000)
+  gstate.backBuffer[0].consumed = true
+  gstate.frontBuffer = make([]Event, 10000)
+  gstate.backBufferMutex = sync.Mutex{}
+  gstate.backBufferCond = sync.Cond{L: &gstate.backBufferMutex}
+  println("len backBuffer", len(gstate.backBuffer))
+
   // ringBuffer := NewRingBuffer(10000)
   // ringBuffer, err := locklessgenericringbuffer.CreateBuffer[Event](1 << 16, 1)
   if err != nil {
@@ -296,13 +287,16 @@ func main() {
   // ringBuffer := ringbuffer.NewSpscRingBuffer(10000)
   writing := uint64(0)
 
-  go Parser(&queue, &wg, &writing, fastMap, state_arena, &keys)
+  go Parser(&queue, &wg, &writing, &fastMap, state_arena, &gstate)
 
   fileScanner := bufio.NewScanner(file)
   total := 0
   start := time.Now()
   sendTime := int64(0)
-  for fileScanner.Scan() {
+  name_id := uint64(0)
+  nameMap := NewHashMap(1000)
+  writePos := 0
+  for fileScanner.Scan() == true {
     total++
     text := fileScanner.Bytes()
 
@@ -315,30 +309,86 @@ func main() {
     // queue.q <- Event{s: state, f: value}
     // println("add text:", string(text))
     // ringBuffer.Write(Event{s: text, f: 0})
-    startSend := time.Since(start).Nanoseconds()
+    // startSend := time.Since(start).Nanoseconds()
 
-    e := Event{f: 0}
-    e.s = make([]byte, len(text))
-    copy(e.s, text)
-    queue.q <- e
+    semiColonIndex := 0;
+    for i, c := range text {
+      if c == ';' {
+        semiColonIndex = i
+        break
+      }
+    }
+    keyBytes := text[:semiColonIndex]
+    key := unsafe.String(&keyBytes[0], len(keyBytes))
+    valueBytes := text[semiColonIndex + 1:]
+    valueBytesString := (*string)(unsafe.Pointer(&valueBytes))
+    ids := nameMap.Get(&key)
+    // print("key: ", key, " id: ", ids, " name_id ", name_id, "\n")
+    if ids == nil {
+      if cap(state_arena) <= len(state_arena) + 1 {
+        state_arena = append(state_arena, State{})
+      } else {
+        state_arena = state_arena[:len(state_arena) + 1]
+      }
+      state := &state_arena[len(state_arena) - 1]
+      state.min = math.MaxFloat64
+      state.max = math.SmallestNonzeroFloat64
+      state.sum = 0
+      state.count = 0
+      fastMap[name_id] = state
+      // nameMap[strings.Clone(key)] = name_id
+      nameMap.Put(strings.Clone(key), name_id)
+      (*ids) = uint64(name_id)
+      // *keys = append(*keys, keyCopy)
+      name_id++
+    }
 
-    sendTime += time.Since(start).Nanoseconds() - startSend
+    // value, err := strconv.ParseFloat(*valueBytesString, 64)
+    value := fastFloat(valueBytesString)
+
+    gstate.frontBuffer[writePos].f = value
+    gstate.frontBuffer[writePos].s = uint64(*ids)
+    gstate.frontBuffer[writePos].consumed = false
+    writePos++
+    if (total == 100000000 ) {
+      println("break")
+      break
+    }
+    if (writePos == len(gstate.frontBuffer)) {
+      gstate.backBufferMutex.Lock()
+      // println("swap ", total/1000000)
+      gstate.backBuffer, gstate.frontBuffer = gstate.frontBuffer, gstate.backBuffer
+      writePos = 0
+      gstate.backBufferMutex.Unlock()
+      gstate.backBufferCond.Signal()
+    }
+
+    // sendTime += time.Since(start).Nanoseconds() - startSend
+  }
+  {
+    gstate.backBufferMutex.Lock()
+    gstate.backBuffer, gstate.frontBuffer = gstate.frontBuffer, gstate.backBuffer
+    writePos = 0
+    gstate.backBufferMutex.Unlock()
+    gstate.backBufferCond.Signal()
   }
   totalTime := time.Since(start).Nanoseconds()
 
 
   for {
+    println("writing: ", writing, " total: ", total)
     if writing == uint64(total) {
       break
     }
   }
-  sort.Strings(keys)
+  // sort.Strings(keys)
+  // TODO: sort keys
   fmt.Printf("{")
-  for i, key := range keys {
-    state := fastMap.Get(&key)
+  for id, name := range fastMap {
+    state := fastMap[id]
     mean := state.sum / float64(state.count)
-    fmt.Printf("%s=%f/%f/%f, ", key, state.min, state.max, mean)
-    if i == len(keys) - 1 {
+    fmt.Printf("%s=%f/%f/%f, ", name, state.min, state.max, mean)
+    if id == int(name_id - 1) {
       fmt.Printf("\b\b")
     }
   }
