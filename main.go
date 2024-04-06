@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"runtime/pprof"
+	"runtime"
 	"strings"
 
 	"time"
@@ -130,7 +131,7 @@ func (m *HashMap) Get(key *string) *uint64 {
 
   bucketIndex := 0
   for bucketIndex = 0; bucketIndex < len(m.buckets[h]) && m.buckets[h][bucketIndex].used; bucketIndex++ {
-    b := m.buckets[h][bucketIndex]
+    b := &m.buckets[h][bucketIndex]
     if b.key == *key {
       return &b.value
     }
@@ -338,7 +339,8 @@ func main() {
       fastMap[name_id] = state
       // nameMap[strings.Clone(key)] = name_id
       nameMap.Put(strings.Clone(key), name_id)
-      (*ids) = uint64(name_id)
+      newid := uint64(name_id)
+      ids = &newid
       // *keys = append(*keys, keyCopy)
       name_id++
     }
@@ -386,6 +388,9 @@ func main() {
   fmt.Printf("{")
   for id, name := range fastMap {
     state := fastMap[id]
+    if state == nil {
+      break
+    }
     mean := state.sum / float64(state.count)
     fmt.Printf("%s=%f/%f/%f, ", name, state.min, state.max, mean)
     if id == int(name_id - 1) {
@@ -401,4 +406,16 @@ func main() {
   fmt.Printf("\tScan time %fs\n", float64(totalTime - sendTime) / float64(1000000000.0))
   fmt.Printf("\tSend time %fs\n", float64(sendTime) / float64(1000000000.0))
   fmt.Printf("Total time %fs\n", float64(wholeTime) / float64(1000000000.0))
+
+
+
+  f, err = os.Create("mem.pprof")
+  if err != nil {
+    println("could not create memory profile: ", err)
+  }
+  defer f.Close() // error handling omitted for example
+  runtime.GC() // get up-to-date statistics
+  if err := pprof.WriteHeapProfile(f); err != nil {
+    println("could not write memory profile: ", err)
+  }
 }
