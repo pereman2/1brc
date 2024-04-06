@@ -9,6 +9,7 @@ import (
 	"runtime/pprof"
 	"runtime"
 	"strings"
+  "sort"
 
 	"time"
 
@@ -296,6 +297,7 @@ func main() {
   sendTime := int64(0)
   name_id := uint64(0)
   nameMap := NewHashMap(1000)
+  sortedNames := make([]string, 0)
   writePos := 0
   for fileScanner.Scan() == true {
     total++
@@ -341,7 +343,7 @@ func main() {
       nameMap.Put(strings.Clone(key), name_id)
       newid := uint64(name_id)
       ids = &newid
-      // *keys = append(*keys, keyCopy)
+      sortedNames = append(sortedNames, strings.Clone(key))
       name_id++
     }
 
@@ -383,10 +385,12 @@ func main() {
       break
     }
   }
-  // sort.Strings(keys)
+  sort.Strings(sortedNames)
   // TODO: sort keys
   fmt.Printf("{")
-  for id, name := range fastMap {
+
+  for _, name := range sortedNames {
+    id := int(*nameMap.Get(&name))
     state := fastMap[id]
     if state == nil {
       break
