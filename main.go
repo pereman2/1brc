@@ -76,7 +76,7 @@ func NewHashMap(size int) *HashMap {
   h := &HashMap{size: size, buckets: make([][]Bucket, size)}
   for i := 0; i < size; i++ {
     h.buckets[i] = make([]Bucket, 0)
-    for j := 0; j < size; j++ {
+    for j := 0; j < 6; j++ {
       h.buckets[i] = append(h.buckets[i], Bucket{used: false})
     }
   }
@@ -86,11 +86,11 @@ func NewHashMap(size int) *HashMap {
 
 func stupidHash(key *string) uint64 {
   hash := uint64(0)
-  hash += uint64((*key)[0])
-  hash += uint64((*key)[1])
-  hash += uint64((*key)[2])
+  hash += uint64((*key)[0]) << 32
+  hash += uint64((*key)[1]) << 16
+  hash += uint64((*key)[2]) << 8
   hash += uint64(len(*key))
-  return uint64(hash) % 1000
+  return uint64(hash) % 10000
 }
 
 func (m *HashMap) Get(key *string) *uint64 {
@@ -117,6 +117,10 @@ func (m *HashMap) Put(key string, value uint64) {
     if b.key == key {
       return
     }
+  }
+  if bucketIndex >= len(m.buckets[h]) {
+    println("exeeded bucket len")
+    os.Exit(1)
   }
   m.buckets[h][bucketIndex].key = key
   m.buckets[h][bucketIndex].hash = h
@@ -171,7 +175,7 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
             gstate *GState, processTime *int64, start *time.Time) {
   total := 0
   state_arena := make([]State, 0)
-  nameMap := NewHashMap(1000)
+  nameMap := NewHashMap(10000)
   fastMap := make([]*State, 10000)
   sortedNames := make([]string, 0)
   name_id := uint64(0)
@@ -284,7 +288,7 @@ func main() {
     results: make(chan Result, 10),
   }
   gstate.backBufferCond = sync.Cond{L: &gstate.backBufferMutex}
-  bufferSize := 1024*1024
+  bufferSize := 1024*1024*10
   numThreads := 8
 
   // ringBuffer := NewRingBuffer(10000)
@@ -349,7 +353,7 @@ func main() {
 
 
   name_id := uint64(0)
-  nameMap := NewHashMap(1000)
+  nameMap := NewHashMap(10000)
   sortedNames := make([]string, 0)
   fastMap := make([]State, 10000)
 
