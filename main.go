@@ -2,6 +2,7 @@ package main
 
 import (
 	// "bufio"
+	"flag"
 	"fmt"
 	"io"
 	_ "net/http/pprof"
@@ -12,13 +13,16 @@ import (
 
 	"time"
 
+	"bufio"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
-  "bufio"
-  "strings"
 )
+
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 
 type Event struct {
   s uint64
@@ -165,12 +169,6 @@ func fastFloat(repr *string) float64 {
 
 func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64, 
             gstate *GState, processTime *int64, start *time.Time) {
-  // consumer, err := ring.CreateConsumer()
-  // if err != nil {
-  //   fmt.Println("Error creating consumer")
-  //   return
-  // }
-  // results := make([]State, 0)
   total := 0
   state_arena := make([]State, 0)
   nameMap := NewHashMap(1000)
@@ -180,19 +178,15 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
 
   println("starting parser")
   for wholeText := range gstate.texts {
-    // startProcess := time.Since(*start).Nanoseconds()
-    // println("got ", len(*wholeText))
     textStr := unsafe.String(&(*wholeText)[0], len(*wholeText))
     parser := bufio.NewScanner(strings.NewReader(textStr))
 
     for parser.Scan() {
       text := parser.Bytes()
       if len(text) == 0 {
-        // println("len 0 eof?")
         continue
       }
       total++
-      // println(string(text))
 
       semiColonIndex := 0;
       for i, c := range text {
@@ -210,7 +204,6 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
       valueBytes := text[semiColonIndex + 1:]
       valueBytesString := (*string)(unsafe.Pointer(&valueBytes))
       ids := nameMap.Get(&key)
-      // print("key: ", key, " id: ", ids, " name_id ", name_id, "\n")
       if ids == nil {
         if cap(state_arena) <= len(state_arena) + 1 {
           state_arena = append(state_arena, State{})
@@ -232,7 +225,6 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
       }
 
       
-      // value, err := strconv.ParseFloat(*valueBytesString, 64)
       value := fastFloat(valueBytesString)
       state := fastMap[*ids]
       state.count++
@@ -265,15 +257,15 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
 
 func main() {
   // prof stuff
-  f, err := os.Create("cpu.pprof")
-  if err != nil {
-    panic(err)
+  if *cpuprofile != "" {
+    f, err := os.Create("cpu.pprof")
+    if err != nil {
+      panic(err)
+    }
+    pprof.StartCPUProfile(f)
+    defer pprof.StopCPUProfile()
   }
-  pprof.StartCPUProfile(f)
-  defer pprof.StopCPUProfile()
 
-
-  // end prof
   file, err := os.OpenFile("measurements-pere.txt", os.O_RDONLY, 0666)
   if err != nil {
     fmt.Println("Error opening file")
@@ -293,7 +285,7 @@ func main() {
   }
   gstate.backBufferCond = sync.Cond{L: &gstate.backBufferMutex}
   bufferSize := 1024*1024
-  numThreads := 4
+  numThreads := 8
 
   // ringBuffer := NewRingBuffer(10000)
   // ringBuffer, err := locklessgenericringbuffer.CreateBuffer[Event](1 << 16, 1)
@@ -395,7 +387,6 @@ func main() {
     }
   }
   sort.Strings(sortedNames)
-  // TODO: sort keys
   fmt.Printf("{")
 
   for _, name := range sortedNames {
@@ -421,13 +412,16 @@ func main() {
 
 
 
-  f, err = os.Create("mem.pprof")
-  if err != nil {
-    println("could not create memory profile: ", err)
-  }
-  defer f.Close() // error handling omitted for example
-  runtime.GC() // get up-to-date statistics
-  if err := pprof.WriteHeapProfile(f); err != nil {
-    println("could not write memory profile: ", err)
+  if *memprofile != "" {
+    f, err := os.Create("mem.pprof")
+    if err != nil {
+      println("could not create memory profile: ", err)
+    }
+    defer f.Close() // error handling omitted for example
+    runtime.GC() // get up-to-date statistics
+    if err := pprof.WriteHeapProfile(f); err != nil {
+      println("could not write memory profile: ", err)
+    }
+
   }
 }
