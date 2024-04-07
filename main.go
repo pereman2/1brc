@@ -93,9 +93,10 @@ func (m *HashMap) Get(key *string) *uint64 {
   h := stupidHash(key)
 
   bucketIndex := 0
-  for bucketIndex = 0; bucketIndex < len(m.buckets[h]) && m.buckets[h][bucketIndex].used; bucketIndex++ {
+  l := len(m.buckets[h])
+  for bucketIndex = 0; bucketIndex < l && m.buckets[h][bucketIndex].used; bucketIndex++ {
     b := &m.buckets[h][bucketIndex]
-    if strings.Compare(b.key, *key) == 0 {
+    if b.key == *key {
       return &b.value
     }
   }
@@ -240,55 +241,21 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
         state.max = value
       }
     }
-
-
-    //
-    // waitSwap := time.Since(start).Nanoseconds()
-    // for !gstate.consumed { }
-    // gstate.backBufferCond.L.Lock()
-    // waitSwap = time.Since(start).Nanoseconds() - waitSwap
-    // waitSwapTotal += waitSwap
-    // // println("swap ", total/1000000)
-    // gstate.backBuffer, gstate.frontBuffer = gstate.frontBuffer, gstate.backBuffer
-    // gstate.consumed = false
-    // writePos = 0
-    // gstate.backBufferCond.Signal()
-    // gstate.backBufferCond.L.Unlock()
-
-    // for i := 0; i < len(*gstate.backBuffer); i++ {
-    //   e := &(*gstate.backBuffer)[i]
-    //   id := e.s
-    //   value := e.f
-    //   state := (*fastMap)[id]
-    //   if state == nil {
-    //     println("state is nil")
-    //     println("id: ", id)
-    //     println("value: ", value)
-    //     os.Exit(1)
-    //   }
-    //   state.count++
-    //   state.sum += value
-    //   if value < state.min {
-    //     state.min = value
-    //   }
-    //   if value > state.max {
-    //     state.max = value
-    //   }
-    //   (*writing)++
-    // }
-    // (*processTime) += time.Since(*start).Nanoseconds() - startProcess
-    // gstate.backBufferCond.L.Unlock()
   }
-  println("ending parser ", total)
+
+  // println("ending parser ", total)
+  totall := 0
   for _, name := range sortedNames {
     id := int(*nameMap.Get(&name))
     state := fastMap[id]
+    totall += int(state.count)
     result := Result {
       name: name,
       result: *state,
     }
     gstate.results <- result
   }
+  // println("ending parser count ", totall)
   writing.Add(1)
 }
 
@@ -323,7 +290,7 @@ func main() {
   }
   gstate.backBufferCond = sync.Cond{L: &gstate.backBufferMutex}
   bufferSize := 1024*1024
-  numThreads := 8
+  numThreads := 1
 
   // ringBuffer := NewRingBuffer(10000)
   // ringBuffer, err := locklessgenericringbuffer.CreateBuffer[Event](1 << 16, 1)
@@ -352,17 +319,22 @@ func main() {
   for {
     buf := make([]byte, bufferSize)
     n, e := file.ReadAt(buf, offset)
-    // println("read ", n)
+    println("read ", n)
     if e == io.EOF {
-      break
+      buf = append(buf, '\n')
+      offset += int64(n)
+    } else {
+      offset += int64(n)
+      bufOffset := int64(len(buf) - 1)
+      for buf[bufOffset] != '\n' {
+        bufOffset--
+      }
+      back := (int64(len(buf) - 1) - bufOffset)
+      println(offset, " ", back)
+      offset -= back
+      buf = buf[:bufOffset]
+
     }
-    offset += int64(n)
-    bufOffset := int64(len(buf) - 1)
-    for buf[bufOffset] != '\n' {
-      bufOffset--
-    }
-    offset -= int64(len(buf)) - bufOffset
-    buf = buf[:bufOffset]
     // for buf[offset] != '\n' {
     //   offset -= 1
     // }
@@ -375,6 +347,9 @@ func main() {
     gstate.texts <- &buf
 
     sendTime += time.Since(start).Nanoseconds() - startSend
+    if e == io.EOF {
+      break
+    }
   }
   close(gstate.texts)
   totalTime := time.Since(start).Nanoseconds()
@@ -388,9 +363,6 @@ func main() {
   for result := range gstate.results {
     // println("results ", result.name, " ", result.result.count)
     total += int(result.result.count)
-    if writing.Load() == int64(numThreads) {
-      break
-    }
     ids := nameMap.Get(&result.name)
     if ids == nil {
       nameMap.Put(result.name, name_id)   
@@ -417,6 +389,9 @@ func main() {
       
     savedResult.sum += result.result.sum
     savedResult.count += result.result.count
+    if writing.Load() == int64(numThreads) && len(gstate.results) == 0 {
+      break
+    }
   }
   sort.Strings(sortedNames)
   // TODO: sort keys
