@@ -201,6 +201,9 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
           break
         }
       }
+      if semiColonIndex == 0 {
+        break
+      }
 
       keyBytes := text[:semiColonIndex]
       key := unsafe.String(&keyBytes[0], len(keyBytes))
@@ -290,7 +293,7 @@ func main() {
   }
   gstate.backBufferCond = sync.Cond{L: &gstate.backBufferMutex}
   bufferSize := 1024*1024
-  numThreads := 1
+  numThreads := 4
 
   // ringBuffer := NewRingBuffer(10000)
   // ringBuffer, err := locklessgenericringbuffer.CreateBuffer[Event](1 << 16, 1)
@@ -319,7 +322,6 @@ func main() {
   for {
     buf := make([]byte, bufferSize)
     n, e := file.ReadAt(buf, offset)
-    println("read ", n)
     if e == io.EOF {
       buf = append(buf, '\n')
       offset += int64(n)
@@ -330,7 +332,6 @@ func main() {
         bufOffset--
       }
       back := (int64(len(buf) - 1) - bufOffset)
-      println(offset, " ", back)
       offset -= back
       buf = buf[:bufOffset]
 
