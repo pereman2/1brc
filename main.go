@@ -289,7 +289,7 @@ func main() {
   }
   gstate.backBufferCond = sync.Cond{L: &gstate.backBufferMutex}
   bufferSize := 1024*1024
-  numThreads := 8
+  numThreads := runtime.NumCPU()
 
   // ringBuffer := NewRingBuffer(10000)
   // ringBuffer, err := locklessgenericringbuffer.CreateBuffer[Event](1 << 16, 1)
