@@ -288,7 +288,7 @@ func main() {
     results: make(chan Result, 10),
   }
   gstate.backBufferCond = sync.Cond{L: &gstate.backBufferMutex}
-  bufferSize := 1024*1024*10
+  bufferSize := 1024*1024
   numThreads := 8
 
   // ringBuffer := NewRingBuffer(10000)
