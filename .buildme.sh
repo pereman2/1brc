@@ -3,7 +3,7 @@
 set -e
 echo "building"
 time go build main.go
-zig build -Drelease-safe
+zig build -Doptimize=ReleaseFast
 # zig build
 
 # echo "running go"

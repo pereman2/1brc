@@ -86,8 +86,8 @@ fn process_thread(chunk: *Chunk) !void {
             name_id += 1;
         }
         var state = &chunk.state_map[id.?];
-        state.min = std.math.min(state.min, value);
-        state.max = std.math.max(state.max, value);
+        state.min = @min(state.min, value);
+        state.max = @max(state.max, value);
         state.count += 1;
         assert(std.math.maxInt(i64) - state.sum > value);
         state.sum += value;
@@ -109,7 +109,7 @@ pub fn main() anyerror!void {
     var allocator = main_arena.allocator();
     defer main_arena.deinit();
     var file_stat = try file.stat();
-    var file_start_address: *u8 = @ptrCast(*u8, std.c.mmap(null, file_stat.size, std.os.PROT.READ, std.os.MAP.SHARED, file.handle, 0));
+    var file_start_address: *u8 = @ptrCast(std.c.mmap(null, file_stat.size, std.os.PROT.READ, std.os.MAP.SHARED, file.handle, 0));
     var file_start_address_slice: []u8 = std.mem.asBytes(file_start_address);
     file_start_address_slice.len = file_stat.size;
     var chunks = std.ArrayListUnmanaged(*Chunk){};
@@ -121,7 +121,7 @@ pub fn main() anyerror!void {
         var chunk_offset: usize = 0;
         const chunk_size = file_stat.size / num_threads;
         while (chunk_offset < file_stat.size) {
-            var amount = std.math.min(chunk_size, file_stat.size - chunk_offset);
+            var amount = @min(chunk_size, file_stat.size - chunk_offset);
             while (file_start_address_slice[chunk_offset+amount-1] != '\n') {
                 amount -= 1;
                 // TODO: missing eof
@@ -139,7 +139,7 @@ pub fn main() anyerror!void {
 
             chunk_offset += amount;
             var thread = try std.Thread.spawn(.{}, process_thread, .{chunk});
-            std.debug.print("chunk {d} {b}\n", .{ chunk.addr[0], chunk.eof });
+            std.debug.print("chunk {d} {}\n", .{ chunk.addr[0], chunk.eof });
             try threads.append(allocator, thread);
         }
     }
