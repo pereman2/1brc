@@ -4,6 +4,7 @@ const heap = @import("std").heap;
 const assert = @import("std").debug.assert;
 
 const State = struct {
+    name: []u8,
     min: i64,
     max: i64,
     sum: i64,
@@ -31,7 +32,6 @@ const FastStringHashMap = std.StringHashMap(u64);
 const Chunk = struct {
     addr: []u8,
     eof: bool,
-    name_map: FastStringHashMap,
     state_map: []State,
     main_allocator: heap.ArenaAllocator,
     id: u64
@@ -63,6 +63,7 @@ fn brc_float_parse(buffer: []u8) i64 {
 fn process_thread(chunk: *Chunk) void {
     var chunk_offset: usize = 0;
     var name_id: usize = 0;
+    var name_map = FastStringHashMap.init(chunk.main_allocator.allocator());
     while (chunk_offset < chunk.addr.len) {
         var semi_colon = chunk_offset;
         while (chunk.addr[semi_colon] != ';') {
@@ -74,7 +75,7 @@ fn process_thread(chunk: *Chunk) void {
         }
         var name = chunk.addr[chunk_offset..semi_colon];
         var value = brc_float_parse(chunk.addr[semi_colon + 1 .. jump_line]);
-        var id = chunk.name_map.get(name);
+        var id = name_map.get(name);
         if (id == null) {
             // var name_copy = chunk.main_allocator.allocator().alloc(u8, name.len) catch |err| {
             //     std.debug.print("Error allocating {}\n", .{err});
@@ -82,7 +83,7 @@ fn process_thread(chunk: *Chunk) void {
             // };
             // std.mem.copyForwards(u8, name_copy, name);
             // std.debug.print("adding {d} {s} {d}\n", .{chunk.id, name_copy, name_id});
-            chunk.name_map.put(name, name_id) catch |err| {
+            name_map.put(name, name_id) catch |err| {
                 std.debug.print("Error adding name {}\n", .{err});
             };
             var state = &chunk.state_map[name_id];
@@ -90,6 +91,7 @@ fn process_thread(chunk: *Chunk) void {
             state.max = std.math.minInt(i64);
             state.count = 0;
             state.sum = 0;
+            state.name = name;
 
             id = name_id;
             name_id += 1;
@@ -137,7 +139,6 @@ pub fn main() anyerror!void {
             var chunk = Chunk{
                 .addr = file_start_address_slice[chunk_offset .. chunk_offset + amount],
                 .eof = (chunk_offset + amount) == file_stat.size,
-                .name_map = FastStringHashMap.init(chunk_allocator),
                 .state_map = try chunk_allocator.alloc(State, 10000),
                 .main_allocator = chunk_arena,
                 .id = chunks.items.len
@@ -153,9 +154,8 @@ pub fn main() anyerror!void {
     for (0..num_threads) |thread_id| {
 
         var last_chunk = &chunks.items[thread_id];
-        var thread = try std.Thread.spawn(.{}, process_thread, .{last_chunk});
         std.debug.print("chunk {*} {d} {}\n", .{ &chunks.items[thread_id], last_chunk.addr[0], last_chunk.eof});
-        try threads.append(thread);
+        try threads.append(try std.Thread.spawn(.{}, process_thread, .{last_chunk}));
     }
 
     for (threads.items) |thread| {
