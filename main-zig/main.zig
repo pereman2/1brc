@@ -3,20 +3,39 @@ const fs = @import("std").fs;
 const heap = @import("std").heap;
 const assert = @import("std").debug.assert;
 
-const Chunk = struct {
-    addr: []u8,
-    eof: bool,
-    name_map: std.StringHashMap(u64),
-    state_map: []State,
-    main_allocator: heap.ArenaAllocator
-};
-
 const State = struct {
     min: i64,
     max: i64,
     sum: i64,
     count: i64,
 };
+
+const FastStringContext = struct {
+    pub fn hash(self: FastStringContext, key: []const u8) u64 {
+        _ = self;
+        var res: u64 = 0;
+        res += @as(u64, key[0]) << 32;
+        res += @as(u64, key[1]) << 16;
+        res += @as(u64, key[2]) << 8;
+        res += @as(u64, key.len);
+        return res;
+    }
+
+    pub fn eql(self: FastStringContext, a: []const u8, b: []const u8) bool {
+        _ = self;
+        return std.mem.eql(u8, a, b);
+    }
+};
+
+const FastStringHashMap = std.HashMap([]const u8, u64, std.hash_map.StringContext, 80);
+const Chunk = struct {
+    addr: []u8,
+    eof: bool,
+    name_map: FastStringHashMap,
+    state_map: []State,
+    main_allocator: heap.ArenaAllocator
+};
+
 
 fn brc_float_parse(buffer: []u8) i64 {
     // from 1brc:  Temperature value: non null double between -99.9 (inclusive) and 99.9 (inclusive), always with one fractional digit
@@ -95,7 +114,7 @@ pub fn main() anyerror!void {
     file_start_address_slice.len = file_stat.size;
     var chunks = std.ArrayListUnmanaged(*Chunk){};
     var threads = std.ArrayListUnmanaged(std.Thread){};
-    const num_threads = 8;
+    const num_threads = try std.Thread.getCpuCount();
 
     {
         // create chunks
@@ -112,7 +131,7 @@ pub fn main() anyerror!void {
             var chunk = &(try allocator.alloc(Chunk, 1))[0];
             chunk.addr = file_start_address_slice[chunk_offset .. chunk_offset + amount];
             chunk.eof = (chunk_offset + amount) == file_stat.size;
-            chunk.name_map = std.StringHashMap(u64).init(chunk_allocator);
+            chunk.name_map = FastStringHashMap.init(chunk_allocator);
             chunk.state_map = try chunk_allocator.alloc(State, 10000);
             assert(chunk.addr[chunk.addr.len-1] == '\n' or chunk.eof);
             chunk.main_allocator = chunk_arena;
@@ -135,7 +154,6 @@ pub fn main() anyerror!void {
     for (chunks.items) |chunk| {
         _ = chunk;
         std.debug.print("chunk \n", .{});
-
     }
 
 
