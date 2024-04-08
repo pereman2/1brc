@@ -129,6 +129,8 @@ func (m *HashMap) Put(key string, value uint64) {
 }
 
 
+// TODO: we can multiply by 10 (a maximum of floating point number) and then divide by 10 at the end
+// so we can skip the comma and just keep multiplying
 func fastFloat(repr *string) float64 {
   i := 0
   minus := false
@@ -182,7 +184,7 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
 
   println("starting parser")
   bufferSize := 1024*1024
-  scan_buf := make([]byte, 0, 1024*1024)
+  scan_buf := make([]byte, 1024*1024)
   for wholeText := range gstate.texts {
     textStr := unsafe.String(&(*wholeText)[0], len(*wholeText))
     parser := bufio.NewScanner(strings.NewReader(textStr))
