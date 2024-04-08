@@ -181,9 +181,12 @@ func Parser(ring *Queue, wg *sync.WaitGroup, writing *atomic.Int64,
   name_id := uint64(0)
 
   println("starting parser")
+  bufferSize := 1024*1024
+  scan_buf := make([]byte, 0, 1024*1024)
   for wholeText := range gstate.texts {
     textStr := unsafe.String(&(*wholeText)[0], len(*wholeText))
     parser := bufio.NewScanner(strings.NewReader(textStr))
+    parser.Buffer(scan_buf, bufferSize)
 
     for parser.Scan() {
       text := parser.Bytes()
