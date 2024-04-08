@@ -4,7 +4,6 @@ const heap = @import("std").heap;
 const assert = @import("std").debug.assert;
 
 const State = struct {
-    name: []u8,
     min: i64,
     max: i64,
     sum: i64,
@@ -32,10 +31,16 @@ const FastStringHashMap = std.StringHashMap(u64);
 const Chunk = struct {
     addr: []u8,
     eof: bool,
+    name_map: *FastStringHashMap,
     state_map: []State,
-    main_allocator: heap.ArenaAllocator,
+    main_allocator: *heap.ArenaAllocator,
     id: u64
 };
+
+fn compare_string(context: void, lhs: []const u8, rhs: []const u8) bool {
+    _ = context;
+    return std.mem.lessThan(u8, lhs, rhs);
+}
 
 
 fn brc_float_parse(buffer: []u8) i64 {
@@ -57,13 +62,15 @@ fn brc_float_parse(buffer: []u8) i64 {
         res += (buffer[offset] - '0');
         offset += 1;
     }
+    if (negative) {
+        res *= -1;
+    }
     return res;
 }
 
 fn process_thread(chunk: *Chunk) void {
     var chunk_offset: usize = 0;
     var name_id: usize = 0;
-    var name_map = FastStringHashMap.init(chunk.main_allocator.allocator());
     while (chunk_offset < chunk.addr.len) {
         var semi_colon = chunk_offset;
         while (chunk.addr[semi_colon] != ';') {
@@ -75,15 +82,15 @@ fn process_thread(chunk: *Chunk) void {
         }
         var name = chunk.addr[chunk_offset..semi_colon];
         var value = brc_float_parse(chunk.addr[semi_colon + 1 .. jump_line]);
-        var id = name_map.get(name);
+        var id = chunk.name_map.get(name);
         if (id == null) {
             // var name_copy = chunk.main_allocator.allocator().alloc(u8, name.len) catch |err| {
             //     std.debug.print("Error allocating {}\n", .{err});
             //     std.os.exit(1);
             // };
             // std.mem.copyForwards(u8, name_copy, name);
-            // std.debug.print("adding {d} {s} {d}\n", .{chunk.id, name_copy, name_id});
-            name_map.put(name, name_id) catch |err| {
+            // std.debug.print("adding {d} {s} {d}\n", .{chunk.id, name, name_id});
+            chunk.name_map.put(name, name_id) catch |err| {
                 std.debug.print("Error adding name {}\n", .{err});
             };
             var state = &chunk.state_map[name_id];
@@ -91,7 +98,6 @@ fn process_thread(chunk: *Chunk) void {
             state.max = std.math.minInt(i64);
             state.count = 0;
             state.sum = 0;
-            state.name = name;
 
             id = name_id;
             name_id += 1;
@@ -119,8 +125,8 @@ pub fn main() anyerror!void {
     var file_start_address_slice: []u8 = std.mem.asBytes(file_start_address);
     file_start_address_slice.len = file_stat.size;
     const num_threads = 32;
-    var chunks = try std.ArrayList(Chunk).initCapacity(allocator, num_threads);
-    var threads = try std.ArrayList(std.Thread).initCapacity(allocator, num_threads);
+    var chunks = std.ArrayList(Chunk).init(allocator);
+    var threads = std.ArrayList(std.Thread).init(allocator);
     std.debug.print("num_threads: {d}\n", .{num_threads});
 
     {
@@ -134,11 +140,15 @@ pub fn main() anyerror!void {
                 // TODO: missing eof
             }
             assert(chunk_offset < chunk_offset + amount);
-            var chunk_arena = heap.ArenaAllocator.init(heap.page_allocator);
+            var chunk_arena = try allocator.create(heap.ArenaAllocator);
+            chunk_arena.* = heap.ArenaAllocator.init(heap.page_allocator);
             var chunk_allocator = chunk_arena.allocator();
+            var fast_map: *FastStringHashMap = try chunk_allocator.create(FastStringHashMap);
+            fast_map.* = FastStringHashMap.init(chunk_allocator);
             var chunk = Chunk{
                 .addr = file_start_address_slice[chunk_offset .. chunk_offset + amount],
                 .eof = (chunk_offset + amount) == file_stat.size,
+                .name_map = fast_map,
                 .state_map = try chunk_allocator.alloc(State, 10000),
                 .main_allocator = chunk_arena,
                 .id = chunks.items.len
@@ -154,21 +164,44 @@ pub fn main() anyerror!void {
     for (0..num_threads) |thread_id| {
 
         var last_chunk = &chunks.items[thread_id];
-        std.debug.print("chunk {*} {d} {}\n", .{ &chunks.items[thread_id], last_chunk.addr[0], last_chunk.eof});
         try threads.append(try std.Thread.spawn(.{}, process_thread, .{last_chunk}));
     }
 
     for (threads.items) |thread| {
         thread.join();
     }
-    var name_map = std.StringHashMap(u64).init(allocator);
-    _ = name_map;
-    var state_map = try allocator.alloc(State, 10000);
-    _ = state_map;
+    var name_state_map = std.StringHashMap(State).init(allocator);
+    var names = std.ArrayList([]const u8).init(allocator);
     for (chunks.items) |chunk| {
-        _ = chunk;
-        std.debug.print("chunk \n", .{});
+        var iterator = chunk.name_map.iterator();
+        while (iterator.next()) |entry| {
+            var key_ptr: *[]const u8 = entry.key_ptr;
+            var value_ptr: *u64 = entry.value_ptr;
+            var state = &chunk.state_map[value_ptr.*];
+            if (!name_state_map.contains(key_ptr.*)) {
+                try name_state_map.put(key_ptr.*, State{ .min = std.math.maxInt(i64), .max=std.math.minInt(i64), .count = 0, .sum = 0});
+                try names.append(key_ptr.*);
+            }
+            var other_state = name_state_map.getPtr(key_ptr.*).?;
+            other_state.min = @min(other_state.min, state.min);
+            other_state.max = @max(other_state.max, state.max);
+            other_state.count += state.count;
+            other_state.sum += state.sum;
+        }
     }
+    std.sort.insertion([]const u8, names.items, {}, compare_string);
+    std.debug.print("{{", .{});
+    for (names.items) |name| {
+        var state = name_state_map.getPtr(name).?;
+
+        std.debug.print("{s}={d}/{d}/{d}, ",  .{
+            name,
+            (@as(f64, @floatFromInt(state.min)) / 10), 
+            (@as(f64, @floatFromInt(state.max)) / 10), 
+            (@as(f64, @floatFromInt(state.sum)) / 10) / @as(f64, @floatFromInt(state.count))
+        });
+    }
+    std.debug.print("}}", .{});
 
 }
 
