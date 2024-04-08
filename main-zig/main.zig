@@ -100,21 +100,16 @@ pub fn main() anyerror!void {
     var dir = fs.cwd();
     var file = try dir.openFile("measurements-pere.txt", .{});
 
-    var offset: u64 = 0;
-    _ = offset;
-    const buffer_size = 1024 * 1024;
-    _ = buffer_size;
-
     var main_arena = heap.ArenaAllocator.init(heap.page_allocator);
     var allocator = main_arena.allocator();
-    defer main_arena.deinit();
     var file_stat = try file.stat();
     var file_start_address: *u8 = @ptrCast(std.c.mmap(null, file_stat.size, std.os.PROT.READ, std.os.MAP.SHARED, file.handle, 0));
     var file_start_address_slice: []u8 = std.mem.asBytes(file_start_address);
     file_start_address_slice.len = file_stat.size;
-    var chunks = std.ArrayListUnmanaged(*Chunk){};
-    var threads = std.ArrayListUnmanaged(std.Thread){};
-    const num_threads = try std.Thread.getCpuCount();
+    const num_threads = 32;
+    var chunks = try std.ArrayList(Chunk).initCapacity(allocator, num_threads);
+    var threads = try std.ArrayList(std.Thread).initCapacity(allocator, num_threads);
+    std.debug.print("num_threads: {d}\n", .{num_threads});
 
     {
         // create chunks
@@ -128,20 +123,26 @@ pub fn main() anyerror!void {
             }
             var chunk_arena = heap.ArenaAllocator.init(heap.page_allocator);
             var chunk_allocator = chunk_arena.allocator();
-            var chunk = &(try allocator.alloc(Chunk, 1))[0];
-            chunk.addr = file_start_address_slice[chunk_offset .. chunk_offset + amount];
-            chunk.eof = (chunk_offset + amount) == file_stat.size;
-            chunk.name_map = FastStringHashMap.init(chunk_allocator);
-            chunk.state_map = try chunk_allocator.alloc(State, 10000);
+            var chunk = Chunk{
+                .addr = file_start_address_slice[chunk_offset .. chunk_offset + amount],
+                .eof = (chunk_offset + amount) == file_stat.size,
+                .name_map = FastStringHashMap.init(chunk_allocator),
+                .state_map = try chunk_allocator.alloc(State, 10000),
+                .main_allocator = chunk_arena
+            };
             assert(chunk.addr[chunk.addr.len-1] == '\n' or chunk.eof);
-            chunk.main_allocator = chunk_arena;
-            try chunks.append(allocator, chunk);
-
+            try chunks.append(chunk);
             chunk_offset += amount;
-            var thread = try std.Thread.spawn(.{}, process_thread, .{chunk});
-            std.debug.print("chunk {d} {}\n", .{ chunk.addr[0], chunk.eof });
-            try threads.append(allocator, thread);
+
         }
+    }
+
+    for (0..num_threads) |thread_id| {
+
+        var last_chunk = &chunks.items[thread_id];
+        var thread = try std.Thread.spawn(.{}, process_thread, .{last_chunk});
+        std.debug.print("chunk {} {d} {}\n", .{ &last_chunk, last_chunk.addr[0], last_chunk.eof});
+        try threads.append(thread);
     }
 
     for (threads.items) |thread| {
@@ -155,7 +156,6 @@ pub fn main() anyerror!void {
         _ = chunk;
         std.debug.print("chunk \n", .{});
     }
-
 
 }
 
