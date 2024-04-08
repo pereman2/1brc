@@ -69,7 +69,7 @@ type Bucket struct {
 
 type HashMap struct {
   size int
-  buckets [][]Bucket
+  buckets [][]Bucket // TODO: make buckets growable
 }
 
 func NewHashMap(size int) *HashMap {
